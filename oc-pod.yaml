@@ -1,0 +1,44 @@
+# OpenCode isolated execution environment pod
+# Template file: uses ${AI_K8S_HOME} placeholder for host paths
+# Deploy via deploy.sh (NOT directly with kubectl apply)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: oc-dev
+  namespace: ai
+spec:
+  containers:
+  - name: oc-dev
+    image: oc-dev:1.0.1
+    env:
+    - name: POSTGRES_PASSWORD
+      value: "secret"
+    # Mount OpenCode config/state/share/cache from host oc-cache/ subdirectories
+    # via subPath on a single volume (oc-base)
+    volumeMounts:
+    - name: oc-base
+      mountPath: /home/postgres/.config/opencode
+      subPath: config
+    - name: oc-base
+      mountPath: /home/postgres/.local/state/opencode
+      subPath: state
+    - name: oc-base
+      mountPath: /home/postgres/.local/share/opencode
+      subPath: share
+    - name: oc-base
+      mountPath: /home/postgres/.cache/opencode
+      subPath: cache
+    # Working directory for OpenCode to operate on source code
+    - name: k8s-work
+      mountPath: /home/postgres/work
+  # ${AI_K8S_HOME} is substituted at deploy time by deploy.sh (envsubst)
+  # Defaults to the project root directory (where deploy.sh lives)
+  volumes:
+  - name: oc-base
+    hostPath:
+      path: ${AI_K8S_HOME}/oc-cache
+      type: DirectoryOrCreate
+  - name: k8s-work
+    hostPath:
+      path: ${AI_K8S_HOME}/k8s-work
+      type: DirectoryOrCreate

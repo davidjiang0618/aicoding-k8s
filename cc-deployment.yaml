@@ -1,0 +1,51 @@
+# Claude Code Deployment: manages multiple pod replicas for parallel execution
+# Template file: uses ${AI_K8S_HOME}, ${ANTHROPIC_AUTH_TOKEN}, ${CC_REPLICAS} placeholders
+# Deploy via cc-deploy-deployment.sh (NOT directly with kubectl apply)
+#
+# Note: all replicas share the same hostPath volumes (cc-cache, k8s-work).
+# If isolated storage per pod is needed, use PVC with StatefulSet instead.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cc-dev-deployment
+  namespace: ai
+spec:
+  replicas: ${CC_REPLICAS}
+  selector:
+    matchLabels:
+      app: cc-dev
+  template:
+    metadata:
+      labels:
+        app: cc-dev
+    spec:
+      containers:
+      - name: cc-dev
+        image: cc-dev:1.0.1
+        env:
+        - name: ANTHROPIC_AUTH_TOKEN
+          value: "${ANTHROPIC_AUTH_TOKEN}"
+        - name: ANTHROPIC_DEFAULT_SONNET_MODEL
+          value: "${CC_SONNET_MODEL}"
+        - name: ANTHROPIC_DEFAULT_OPUS_MODEL
+          value: "${CC_OPUS_MODEL}"
+        - name: ANTHROPIC_DEFAULT_HAIKU_MODEL
+          value: "${CC_HAIKU_MODEL}"
+        # Mount Claude Code data directory from host cc-cache/claude/
+        volumeMounts:
+        - name: cc-data
+          mountPath: /home/postgres/.claude
+        # Working directory for Claude Code to operate on source code
+        - name: k8s-work
+          mountPath: /home/postgres/work
+      # ${AI_K8S_HOME} is substituted at deploy time by cc-deploy-deployment.sh (envsubst)
+      # Defaults to the project root directory (where the script lives)
+      volumes:
+      - name: cc-data
+        hostPath:
+          path: ${AI_K8S_HOME}/cc-cache/claude
+          type: DirectoryOrCreate
+      - name: k8s-work
+        hostPath:
+          path: ${AI_K8S_HOME}/k8s-work
+          type: DirectoryOrCreate

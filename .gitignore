@@ -1,0 +1,15 @@
+.DS_Store
+.idea/
+
+# Pre-downloaded binaries
+docker/oc/bin/
+
+# Runtime data directories (created automatically by deploy scripts)
+oc-cache/*
+!oc-cache/.gitkeep
+cc-cache/*
+!cc-cache/.gitkeep
+codex-cache/*
+!codex-cache/.gitkeep
+k8s-work/*
+!k8s-work/.gitkeep
