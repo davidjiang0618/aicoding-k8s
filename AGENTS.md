@@ -1,44 +1,35 @@
 # AGENTS.md
 
-Kubernetes manifests and Docker images for isolated AI coding tool environments (OpenCode, Claude Code, Codex CLI), deployed to the `ai` namespace. All images are Ubuntu 24.04 with database build deps (PostgreSQL, Redis, etc.). No application code, no tests, no lint — this is purely infra config.
+Kubernetes infra config for isolated AI coding tool environments (OpenCode, Claude Code, Codex CLI), deployed to the `ai` namespace. All images are Ubuntu 24.04 with database build deps. No application code, no tests, no lint.
 
-## Naming convention
+Full user-facing docs are in `README.md`. This file covers what an agent would likely miss.
 
-Every file/script is prefixed by tool: `oc-` (OpenCode), `cc-` (Claude Code), `codex-` (Codex CLI). Docker images: `<prefix>-dev:1.0.1`.
+## File mapping
 
-## Build
+| Deploy script | YAML template | Pod name | Image |
+|---------------|--------------|----------|-------|
+| `oc-deploy.sh` | `oc-pod.yaml` | `oc-dev` | `oc-dev:1.0.1` |
+| `oc-deploy-deployment.sh` | `oc-deployment.yaml` | `oc-dev-deployment-*` | `oc-dev:1.0.1` |
+| `cc-deploy.sh` | `cc-pod.yaml` | `cc-dev` | `cc-dev:1.0.1` |
+| `cc-deploy-deployment.sh` | `cc-deployment.yaml` | `cc-dev-deployment-*` | `cc-dev:1.0.1` |
+| `codex-deploy.sh` | `codex-pod.yaml` | `codex-dev` | `codex-dev:1.0.1` |
+| `codex-deploy-deployment.sh` | `codex-deployment.yaml` | `codex-dev-deployment-*` | `codex-dev:1.0.1` |
 
-```bash
-cd docker/oc && ./download.sh && ./build.sh   # OpenCode: download binary first!
-cd docker/cc && ./build.sh                     # Claude Code: installs via npm in Dockerfile
-cd docker/codex && ./build.sh                  # Codex CLI: installs via npm in Dockerfile
-```
+## Build order
 
-- OpenCode requires running `docker/oc/download.sh` before `build.sh` — it downloads the binary to `docker/oc/bin/` (gitignored). Auto-detects arch and latest version.
-- `build.sh` auto-detects host UID/GID via `$(id -u)`/`$(id -g)` and passes as `--build-arg` so container `postgres` user matches host user for `hostPath` volume access. Different user cloning the repo? Just rebuild.
+- **OpenCode**: must run `docker/oc/download.sh` **before** `build.sh` — downloads binary to `docker/oc/bin/` (gitignored). `download.sh` auto-detects arch and latest GitHub release version.
+- **Claude Code / Codex CLI**: just `build.sh` (npm install happens in Dockerfile).
+- `build.sh` auto-detects host UID/GID for `hostPath` volume access — different user cloning? Just rebuild.
 - Append `clean` to `build.sh` for no-cache build.
 
-## Deploy
-
-6 deploy scripts: `{oc,cc,codex}-deploy.sh` (single pod), `{oc,cc,codex}-deploy-deployment.sh` (Deployment with replicas).
+## Deploy scripts
 
 **Pod scripts**: `{apply|delete|status}`
 **Deployment scripts**: `{apply|delete|status|scale N}`
 
-```bash
-./oc-deploy-deployment.sh apply                    # uses defaults
-OC_REPLICAS=5 ./oc-deploy-deployment.sh apply      # override replicas
-./oc-deploy-deployment.sh scale 2                  # scale without re-apply
-```
+All scripts: `AI_K8S_HOME` defaults to script directory → `envsubst` resolves `${VAR}` in YAML → `kubectl apply -f -` from stdin.
 
-All scripts follow the same pattern:
-1. `AI_K8S_HOME` defaults to script directory (overridable)
-2. `kubectl create namespace ai 2>/dev/null || true`
-3. `mkdir -p` cache dirs
-4. `envsubst` substitutes `${AI_K8S_HOME}` + tool env vars in YAML
-5. `kubectl apply -f -` from stdin
-
-YAML files are templates with `${VAR}` placeholders — **never `kubectl apply` them directly**, always use the deploy scripts.
+**Never `kubectl apply` YAML files directly** — they contain unresolved `${VAR}` placeholders.
 
 ### Required env vars
 
@@ -48,47 +39,23 @@ YAML files are templates with `${VAR}` placeholders — **never `kubectl apply` 
 | Claude Code | `ANTHROPIC_AUTH_TOKEN` | `CC_SONNET_MODEL=glm-5.1`, `CC_OPUS_MODEL=glm-5.1`, `CC_HAIKU_MODEL=glm-5.1`, `CC_REPLICAS=3` |
 | Codex CLI | `CODEX_API_KEY` | `CODEX_MODEL=GLM-5.1`, `CODEX_REPLICAS=3` |
 
-### Codex config.toml
+## Codex CCX sidecar
 
-Deploy scripts auto-generate `codex-cache/codex/config.toml` on each `apply` — **manual edits are lost**. It configures:
-- `model_provider = "ccx"` via CCX sidecar proxy at `http://localhost:3000/v1`
-- Three profiles: `glm-5-1` (GLM-5.1, default), `glm-5-turbo` (GLM-5-Turbo), `glm-4-7-flashx` (GLM-4.7-FlashX)
-- Switch at runtime: `codex --config profile=glm-5-turbo`
+Codex CLI (Rust) only supports OpenAI Responses API, but Zhipu GLM only supports Chat Completions. CCX sidecar in the same pod handles translation: `Codex CLI → localhost:3000 (CCX) → Zhipu GLM`.
 
-### Codex CCX sidecar
-
-Codex CLI (Rust) only supports the OpenAI Responses API (`/v1/responses`), but Zhipu GLM only supports Chat Completions (`/v1/chat/completions`). A CCX sidecar container runs in the same pod:
-
-```
-Codex CLI → localhost:3000 (CCX) → Responses→Chat conversion → Zhipu GLM
-```
-
-- **Image**: `crpi-i19l8zl0ugidq97v.cn-hangzhou.personal.cr.aliyuncs.com/bene/ccx:latest`
-- **Config persistence**: `codex-cache/ccx/` → `/app/.config` (hostPath)
-- **Auth**: `PROXY_ACCESS_KEY` = `${CODEX_API_KEY}` (same key for CCX auth and Zhipu upstream)
-- **Web UI is disabled** (`ENABLE_WEB_UI=false`). First-time channel setup: temporarily change to `true` in the YAML and re-apply, or configure CCX via its API directly. After initial setup, config persists in `codex-cache/ccx/` across pod restarts.
-
-### Claude Code API
-
-Uses Zhipu Anthropic-compatible API (`ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic`). All three model slots (sonnet/opus/haiku) default to `glm-5.1`.
-
-## Volume mounts
-
-| Host path | Container path | Tool |
-|-----------|---------------|------|
-| `oc-cache/{config,state,share,cache}` | `~/.config/opencode`, `~/.local/state/opencode`, `~/.local/share/opencode`, `~/.cache/opencode` | OpenCode |
-| `cc-cache/claude` | `~/.claude` | Claude Code |
-| `codex-cache/codex` | `~/.codex` | Codex CLI |
-| `codex-cache/ccx` | `/app/.config` | Codex CCX sidecar |
-| `k8s-work` | `~/work` | All (shared) |
+- `PROXY_ACCESS_KEY` = `${CODEX_API_KEY}` (same key for CCX auth and Zhipu upstream)
+- `ENABLE_WEB_UI=false` in YAML — first-time channel setup requires temporarily setting `true` and re-applying
+- Deploy scripts auto-generate `codex-cache/codex/config.toml` on each `apply` — **manual edits are lost**
+- Three profiles switchable at runtime: `codex --config profile=glm-5-turbo`
 
 ## Gotchas
 
-- **Host paths are macOS-specific**: volume mounts point under `/Users/david/ak/`. Not portable to Linux without changes.
-- **TLS verification disabled**: `NODE_TLS_REJECT_UNAUTHORIZED=0` in all Dockerfiles — intentional for local dev.
-- **All YAML paths use `${AI_K8S_HOME}`**: substituted via `envsubst` at deploy time, never hardcoded.
-- **Codex config is overwritten on each `apply`**: `config.toml` is generated from deploy script, not a tracked file.
-- **Shared `k8s-work` volume**: all three tools share the same working directory. Concurrent writes can conflict.
-- **`.gitkeep` preserves dirs**: runtime data directories are gitignored (`oc-cache/*`, `cc-cache/*`, `codex-cache/*`, `k8s-work/*`).
-- **CCX first-time setup required**: Codex pods need a one-time CCX channel configuration before use. Config persists in `codex-cache/ccx/`.
-- **Deployment replicas share hostPath volumes**: if isolated storage per pod is needed, use PVC with StatefulSet instead (noted in deployment YAMLs).
+- **`download.sh` is slow in China**: use `https_proxy=http://127.0.0.1:7890 ./download.sh`
+- **macOS users need `envsubst`**: `brew install gettext` (pre-installed on most Linux distros)
+- **TLS verification disabled**: `NODE_TLS_REJECT_UNAUTHORIZED=0` in all Dockerfiles — intentional
+- **`POSTGRES_PASSWORD=secret` in OC manifests**: boilerplate, not used by OpenCode itself
+- **Shared `k8s-work/` volume**: all three tools mount the same directory — use separate git repos or subdirectories per project to avoid conflicts
+- **`k8s-work/` causes `git add -A` to fail** (empty untracked dir with no commits) — add files explicitly: `git add <specific-files>`
+- **CCX first-time setup required**: Codex pods need one-time channel configuration; config persists in `codex-cache/ccx/`
+- **Deployment replicas share hostPath volumes**: for per-pod isolation, use PVC with StatefulSet
+- **Runtime data dirs are gitignored** (`oc-cache/*`, `cc-cache/*`, `codex-cache/*`, `k8s-work/*`), preserved by `.gitkeep`
