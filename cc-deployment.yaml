@@ -22,6 +22,13 @@ spec:
       containers:
       - name: cc-dev
         image: cc-dev:1.0.1
+        ports:
+        - containerPort: 5432
+        - containerPort: 5173
+        - containerPort: 8000
+        - containerPort: 8080
+        - containerPort: 80
+        - containerPort: 443
         env:
         - name: ANTHROPIC_AUTH_TOKEN
           value: "${ANTHROPIC_AUTH_TOKEN}"

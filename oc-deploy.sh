@@ -17,14 +17,17 @@
 
 export AI_K8S_HOME=${AI_K8S_HOME:-$(cd "$(dirname "$0")" && pwd)}
 YAML=$(envsubst < oc-pod.yaml)
+SVC_YAML=$(envsubst < oc-service.yaml)
 
 case "$1" in
   apply)
     kubectl create namespace ai 2>/dev/null || true
     mkdir -p "${AI_K8S_HOME}"/oc-cache/{config,state,share,cache} "${AI_K8S_HOME}/k8s-work"
     echo "$YAML" | kubectl apply -f -
+    echo "$SVC_YAML" | kubectl apply -f -
     ;;
   delete)
+    echo "$SVC_YAML" | kubectl delete -f - 2>/dev/null || true
     echo "$YAML" | kubectl delete -f -
     ;;
   status)

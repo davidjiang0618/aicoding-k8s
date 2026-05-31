@@ -6,10 +6,19 @@ kind: Pod
 metadata:
   name: oc-dev
   namespace: ai
+  labels:
+    app: oc-dev
 spec:
   containers:
   - name: oc-dev
     image: oc-dev:1.0.1
+    ports:
+    - containerPort: 5432
+    - containerPort: 5173
+    - containerPort: 8000
+    - containerPort: 8080
+    - containerPort: 80
+    - containerPort: 443
     env:
     - name: POSTGRES_PASSWORD
       value: "secret"

@@ -30,7 +30,7 @@
 
 export AI_K8S_HOME=${AI_K8S_HOME:-$(cd "$(dirname "$0")" && pwd)}
 export ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:?"ERROR: ANTHROPIC_AUTH_TOKEN is required. Set your GLM API key: export ANTHROPIC_AUTH_TOKEN=your-key"}
-export CC_REPLICAS=${CC_REPLICAS:-3}
+export CC_REPLICAS=${CC_REPLICAS:-1}
 export CC_SONNET_MODEL=${CC_SONNET_MODEL:-glm-5.1}
 export CC_OPUS_MODEL=${CC_OPUS_MODEL:-glm-5.1}
 export CC_HAIKU_MODEL=${CC_HAIKU_MODEL:-glm-5.1}
@@ -41,8 +41,12 @@ case "$1" in
     mkdir -p "${AI_K8S_HOME}/cc-cache/claude" "${AI_K8S_HOME}/k8s-work"
     YAML=$(envsubst < cc-deployment.yaml)
     echo "$YAML" | kubectl apply -f -
+    SVC_YAML=$(envsubst < cc-service.yaml)
+    echo "$SVC_YAML" | kubectl apply -f -
     ;;
   delete)
+    SVC_YAML=$(envsubst < cc-service.yaml)
+    echo "$SVC_YAML" | kubectl delete -f - 2>/dev/null || true
     YAML=$(envsubst < cc-deployment.yaml)
     echo "$YAML" | kubectl delete -f -
     ;;

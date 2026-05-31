@@ -1,0 +1,45 @@
+# Claude Code NodePort Service: exposes cc-dev-deployment ports externally
+# Template file: uses ${AI_K8S_HOME} placeholder
+# Deploy via cc-deploy-deployment.sh (NOT directly with kubectl apply)
+#
+# Port mapping:
+#   5432 (PostgreSQL)  -> NodePort 30543
+#   5173 (Vite dev)    -> NodePort 30517
+#   8000 (HTTP)        -> NodePort 30800
+#   8080 (HTTP alt)    -> NodePort 30080
+#   80  (HTTP)         -> NodePort 30000
+#   443 (HTTPS)        -> NodePort 30443
+apiVersion: v1
+kind: Service
+metadata:
+  name: cc-dev-service
+  namespace: ai
+spec:
+  type: NodePort
+  selector:
+    app: cc-dev
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: 5432
+    nodePort: 30543
+  - name: vite
+    port: 5173
+    targetPort: 5173
+    nodePort: 30517
+  - name: http-8000
+    port: 8000
+    targetPort: 8000
+    nodePort: 30800
+  - name: http-8080
+    port: 8080
+    targetPort: 8080
+    nodePort: 30080
+  - name: http
+    port: 80
+    targetPort: 80
+    nodePort: 30000
+  - name: https
+    port: 443
+    targetPort: 443
+    nodePort: 30443
