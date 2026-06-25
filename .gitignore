@@ -10,6 +10,7 @@ oc-cache/*
 cc-cache/*
 !cc-cache/.gitkeep
 codex-cache/*
-!codex-cache/.gitkeep
+codex_new-cache/*
+codex_cc-cache/*
 k8s-work/*
 !k8s-work/.gitkeep

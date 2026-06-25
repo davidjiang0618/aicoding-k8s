@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
       - name: cc-dev
-        image: cc-dev:1.0.1
+        image: cc-dev:2.0.1
         ports:
         - containerPort: 5432
         - containerPort: 5173

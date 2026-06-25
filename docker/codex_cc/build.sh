@@ -1,16 +1,16 @@
 #!/bin/bash
 
-# Build the codex-dev Docker image for Codex CLI isolated execution environment
+# Build the codex_cc-dev Docker image for Codex CLI (via cc-switch proxy)
 # Usage:
 #   ./build.sh          Build with Docker layer cache (fast)
 #   ./build.sh clean    Build without cache (use when cache causes issues)
 #
 # Override image name and tag via environment variables:
-#   IMAGE_NAME=codex-dev IMAGE_TAG=1.0.1 ./build.sh
+#   IMAGE_NAME=codex_cc-dev IMAGE_TAG=1.0.1 ./build.sh
 
 cd "$(dirname "$0")"
 
-IMAGE_NAME=${IMAGE_NAME:-codex-dev}
+IMAGE_NAME=${IMAGE_NAME:-codex_cc-dev}
 IMAGE_TAG=${IMAGE_TAG:-1.0.1}
 USER_ID=${USER_ID:-$(id -u)}
 GROUP_ID=${GROUP_ID:-$(id -g)}

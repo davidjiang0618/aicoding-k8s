@@ -9,7 +9,7 @@ metadata:
 spec:
   containers:
   - name: cc-dev
-    image: cc-dev:1.0.1
+    image: cc-dev:2.0.1
     env:
     - name: ANTHROPIC_AUTH_TOKEN
       value: "${ANTHROPIC_AUTH_TOKEN}"

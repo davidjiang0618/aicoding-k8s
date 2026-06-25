@@ -1,0 +1,59 @@
+# Codex CLI Deployment (via cc-switch proxy on host, no sidecar)
+# Template file: uses ${AI_K8S_HOME}, ${CODEX_API_KEY}, ${CODEX_MODEL}, ${CODEX_CC_REPLICAS} placeholders
+# Deploy via codex_cc-deploy-deployment.sh (NOT directly with kubectl apply)
+#
+# Architecture:
+#   Codex CLI → host.docker.internal:15721 (cc-switch proxy) → Zhipu GLM
+#
+# Prerequisite: cc-switch desktop app running on host with proxy enabled
+#
+# Note: all replicas share the same hostPath volumes (codex_cc-cache, k8s-work).
+# If isolated storage per pod is needed, use PVC with StatefulSet instead.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: codex-cc-dev-deployment
+  namespace: ai
+spec:
+  replicas: ${CODEX_CC_REPLICAS}
+  selector:
+    matchLabels:
+      app: codex-cc-dev
+  template:
+    metadata:
+      labels:
+        app: codex-cc-dev
+    spec:
+      containers:
+      - name: codex-cc-dev
+        image: codex_cc-dev:1.0.1
+        ports:
+        - containerPort: 5432
+        - containerPort: 5173
+        - containerPort: 8000
+        - containerPort: 8080
+        - containerPort: 80
+        - containerPort: 443
+        env:
+        - name: CODEX_API_KEY
+          value: "${CODEX_API_KEY}"
+        - name: CODEX_MODEL
+          value: "${CODEX_MODEL}"
+        # Mount Codex config directory from host codex_cc-cache/codex/
+        volumeMounts:
+        - name: codex-cc-data
+          mountPath: /home/postgres/.codex
+        # Working directory for Codex to operate on source code
+        - name: k8s-work
+          mountPath: /home/postgres/work
+      # ${AI_K8S_HOME} is substituted at deploy time by codex_cc-deploy-deployment.sh (envsubst)
+      # Defaults to the project root directory (where the script lives)
+      volumes:
+      - name: codex-cc-data
+        hostPath:
+          path: ${AI_K8S_HOME}/codex_cc-cache/codex
+          type: DirectoryOrCreate
+      - name: k8s-work
+        hostPath:
+          path: ${AI_K8S_HOME}/k8s-work
+          type: DirectoryOrCreate

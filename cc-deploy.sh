@@ -27,9 +27,9 @@
 
 export AI_K8S_HOME=${AI_K8S_HOME:-$(cd "$(dirname "$0")" && pwd)}
 export ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:?"ERROR: ANTHROPIC_AUTH_TOKEN is required. Set your GLM API key: export ANTHROPIC_AUTH_TOKEN=your-key"}
-export CC_SONNET_MODEL=${CC_SONNET_MODEL:-glm-5.1}
-export CC_OPUS_MODEL=${CC_OPUS_MODEL:-glm-5.1}
-export CC_HAIKU_MODEL=${CC_HAIKU_MODEL:-glm-5.1}
+export CC_SONNET_MODEL=${CC_SONNET_MODEL:-glm-5.2}
+export CC_OPUS_MODEL=${CC_OPUS_MODEL:-glm-5.2}
+export CC_HAIKU_MODEL=${CC_HAIKU_MODEL:-glm-5.2}
 
 YAML=$(envsubst < cc-pod.yaml)
 
