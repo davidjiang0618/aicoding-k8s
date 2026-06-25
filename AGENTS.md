@@ -6,14 +6,14 @@ Full user-facing docs are in `README.md`. This file covers what an agent would l
 
 ## File mapping
 
-| Deploy script | YAML template | Pod name | Image |
-|---------------|--------------|----------|-------|
-| `oc-deploy.sh` | `oc-pod.yaml` | `oc-dev` | `oc-dev:1.0.1` |
-| `oc-deploy-deployment.sh` | `oc-deployment.yaml` | `oc-dev-deployment-*` | `oc-dev:1.0.1` |
-| `cc-deploy.sh` | `cc-pod.yaml` | `cc-dev` | `cc-dev:1.0.1` |
-| `cc-deploy-deployment.sh` | `cc-deployment.yaml` | `cc-dev-deployment-*` | `cc-dev:1.0.1` |
-| `codex-deploy.sh` | `codex-pod.yaml` | `codex-dev` | `codex-dev:1.0.1` |
-| `codex-deploy-deployment.sh` | `codex-deployment.yaml` | `codex-dev-deployment-*` | `codex-dev:1.0.1` |
+| Deploy script | YAML templates | Pod name | Image |
+|---------------|---------------|----------|-------|
+| `oc-deploy.sh` | `oc-pod.yaml`, `oc-service.yaml` | `oc-dev` | `oc-dev:1.0.1` |
+| `oc-deploy-deployment.sh` | `oc-deployment.yaml`, `oc-service.yaml` | `oc-dev-deployment-*` | `oc-dev:1.0.1` |
+| `cc-deploy.sh` | `cc-pod.yaml`, `cc-service.yaml` | `cc-dev` | `cc-dev:2.0.1` |
+| `cc-deploy-deployment.sh` | `cc-deployment.yaml`, `cc-service.yaml` | `cc-dev-deployment-*` | `cc-dev:2.0.1` |
+| `codex_cc-deploy.sh` | `codex_cc-pod.yaml`, `codex_cc-service.yaml` | `codex-cc-dev` | `codex_cc-dev:1.0.1` |
+| `codex_cc-deploy-deployment.sh` | `codex_cc-deployment.yaml`, `codex_cc-service.yaml` | `codex-cc-dev-deployment-*` | `codex_cc-dev:1.0.1` |
 
 ## Build order
 
@@ -36,17 +36,32 @@ All scripts: `AI_K8S_HOME` defaults to script directory → `envsubst` resolves 
 | Tool | Required | Defaults |
 |------|----------|----------|
 | OpenCode | — | `OC_REPLICAS=3` |
-| Claude Code | `ANTHROPIC_AUTH_TOKEN` | `CC_SONNET_MODEL=glm-5.1`, `CC_OPUS_MODEL=glm-5.1`, `CC_HAIKU_MODEL=glm-5.1`, `CC_REPLICAS=3` |
-| Codex CLI | `CODEX_API_KEY` | `CODEX_MODEL=GLM-5.1`, `CODEX_REPLICAS=3` |
+| Claude Code | `ANTHROPIC_AUTH_TOKEN` | `CC_SONNET_MODEL=glm-5.2`, `CC_OPUS_MODEL=glm-5.2`, `CC_HAIKU_MODEL=glm-5.2`, `CC_REPLICAS=1` |
+| Codex CLI (codex_cc) | — (cc-switch manages GLM auth) | `CODEX_MODEL=GLM-5.1`, `CC_SWITCH_PORT=15721`, `CODEX_CC_REPLICAS=3` |
 
-## Codex CCX sidecar
+## NodePort allocation
 
-Codex CLI (Rust) only supports OpenAI Responses API, but Zhipu GLM only supports Chat Completions. CCX sidecar in the same pod handles translation: `Codex CLI → localhost:3000 (CCX) → Zhipu GLM`.
+| Tool | Port range | 5432 | 5173 | 8000 | 8080 | 80 | 443 |
+|------|-----------|------|------|------|------|-----|-----|
+| cc | 30xxx | 30543 | 30517 | 30800 | 30080 | 30000 | 30443 |
+| oc | 31xxx | 31543 | 31517 | 31800 | 31080 | 31000 | 31443 |
+| codex_cc | 32xxx | 32543 | 32517 | 32700 | 32080 | 32000 | 32443 |
 
-- `PROXY_ACCESS_KEY` = `${CODEX_API_KEY}` (same key for CCX auth and Zhipu upstream)
-- `ENABLE_WEB_UI=false` in YAML — first-time channel setup requires temporarily setting `true` and re-applying
-- Deploy scripts auto-generate `codex-cache/codex/config.toml` on each `apply` — **manual edits are lost**
-- Three profiles switchable at runtime: `codex --config profile=glm-5-turbo`
+Valid NodePort range is **30000-32767**. When adding new tools, pick the next free range.
+
+## Codex CLI architecture (codex_cc)
+
+Codex CLI only supports OpenAI Responses API, but Zhipu GLM only supports Chat Completions. **cc-switch** (desktop app running on the macOS host) bridges this:
+
+```
+Codex CLI (container) → host.docker.internal:15721 (cc-switch proxy) → Zhipu GLM
+```
+
+- **cc-switch must be running on the host** with proxy enabled and GLM provider configured
+- No API key needed in deploy script — cc-switch manages GLM authentication
+- `CODEX_API_KEY` is set to dummy value `cc-switch-managed` (Codex CLI requires the env var to exist)
+- Deploy scripts auto-generate `codex_cc-cache/codex/config.toml` on each `apply` — **manual edits are lost**
+- Profiles switchable at runtime: `codex --config profile=glm-4-6`
 
 ## Gotchas
 
@@ -56,6 +71,6 @@ Codex CLI (Rust) only supports OpenAI Responses API, but Zhipu GLM only supports
 - **`POSTGRES_PASSWORD=secret` in OC manifests**: boilerplate, not used by OpenCode itself
 - **Shared `k8s-work/` volume**: all three tools mount the same directory — use separate git repos or subdirectories per project to avoid conflicts
 - **`k8s-work/` causes `git add -A` to fail** (empty untracked dir with no commits) — add files explicitly: `git add <specific-files>`
-- **CCX first-time setup required**: Codex pods need one-time channel configuration; config persists in `codex-cache/ccx/`
 - **Deployment replicas share hostPath volumes**: for per-pod isolation, use PVC with StatefulSet
-- **Runtime data dirs are gitignored** (`oc-cache/*`, `cc-cache/*`, `codex-cache/*`, `k8s-work/*`), preserved by `.gitkeep`
+- **Runtime data dirs are gitignored** (`oc-cache/*`, `cc-cache/*`, `codex_cc-cache/*`, `k8s-work/*`), preserved by `.gitkeep`
+- **cc-switch host dependency**: codex_cc pods cannot reach GLM if cc-switch is not running on the host

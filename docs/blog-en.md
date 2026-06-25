@@ -26,7 +26,7 @@ The project delivers three core values:
 
 1. **Isolation by default.** Each agent runs in its own Pod with its own filesystem, user namespace, and resource limits. The host machine is protected — agents can only see what's mounted into their container. Multiple agents can run concurrently without stepping on each other.
 
-2. **Transparent model adaptation.** Claude Code talks to Zhipu GLM via an Anthropic-compatible API endpoint with zero code changes. Codex CLI uses a CCX sidecar proxy that translates the OpenAI Responses API to Chat Completions in real time. OpenCode is configured directly inside the container. From the agent's perspective, nothing is different — it just works.
+2. **Transparent model adaptation.** Claude Code talks to Zhipu GLM via an Anthropic-compatible API endpoint with zero code changes. Codex CLI connects through a cc-switch proxy running on the host, which translates the OpenAI Responses API to Chat Completions in real time. OpenCode is configured directly inside the container. From the agent's perspective, nothing is different — it just works.
 
 3. **Operational simplicity.** Build images, set an API key, run a deploy script. That's the entire workflow. Scaling from one replica to five is a single command. Teardown is equally simple. No Helm charts, no CRDs, no operators — just shell scripts, YAML templates, and `envsubst`.
 
@@ -39,14 +39,14 @@ aicoding-k8s/
 ├── docker/
 │   ├── oc/          # OpenCode image (pre-downloaded binary)
 │   ├── cc/          # Claude Code image (npm install)
-│   └── codex/       # Codex CLI image (npm install)
-├── oc-*.sh / oc-*.yaml        # OpenCode deploy scripts and templates
-├── cc-*.sh / cc-*.yaml        # Claude Code deploy scripts and templates
-├── codex-*.sh / codex-*.yaml  # Codex CLI deploy scripts and templates
-├── k8s-work/                   # Shared workspace (hostPath mount)
-├── {oc,cc,codex}-cache/        # Per-tool persistent data
-├── AGENTS.md                   # AI agent operations guide
-└── README.md                   # User documentation
+│   └── codex_cc/    # Codex CLI image (npm install)
+├── oc-*.sh / oc-*.yaml           # OpenCode deploy scripts and templates
+├── cc-*.sh / cc-*.yaml           # Claude Code deploy scripts and templates
+├── codex_cc-*.sh / codex_cc-*.yaml # Codex CLI deploy scripts and templates
+├── k8s-work/                      # Shared workspace (hostPath mount)
+├── {oc,cc,codex_cc}-cache/       # Per-tool persistent data
+├── AGENTS.md                      # AI agent operations guide
+└── README.md                      # User documentation
 ```
 
 ### Two Deployment Modes
@@ -89,12 +89,12 @@ The adaptation requires exactly one line in the Dockerfile:
 ENV ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic
 ```
 
-Claude Code supports three model slots — Sonnet, Opus, and Haiku — each typically mapped to a different Anthropic model. In aicoding-k8s, all three slots default to `glm-5.1` but can be overridden independently:
+Claude Code supports three model slots — Sonnet, Opus, and Haiku — each typically mapped to a different Anthropic model. In aicoding-k8s, all three slots default to `glm-5.2` but can be overridden independently:
 
 ```bash
-CC_SONNET_MODEL=glm-5.1
-CC_OPUS_MODEL=glm-5.1
-CC_HAIKU_MODEL=glm-5.1
+CC_SONNET_MODEL=glm-5.2
+CC_OPUS_MODEL=glm-5.2
+CC_HAIKU_MODEL=glm-5.2
 ```
 
 This works because Zhipu's Anthropic-compatible layer faithfully implements the full Anthropic API surface — streaming, tool use, multi-turn conversations. Claude Code is completely unaware it is talking to a non-Anthropic model.
@@ -116,85 +116,79 @@ To ensure configuration survives Pod restarts, four directories are mounted via 
 
 These are set via OpenCode's environment variables (`OC_CONFIG_HOME`, `OC_STATE_HOME`, etc.), each mapped to a `subPath` mount from the host's `oc-cache/` directory. Once configured, the setup persists across Pod deletions and recreations.
 
-### Codex CLI: CCX Sidecar Protocol Translation
+### Codex CLI: cc-switch Proxy Protocol Translation
 
-This is the most complex adaptation. Codex CLI, written in Rust, **only supports the OpenAI Responses API** (`POST /v1/responses`). Zhipu GLM **only supports the Chat Completions API** (`POST /v1/chat/completions`). These are completely different protocols:
+This is the most complex adaptation. Codex CLI **only supports the OpenAI Responses API** (`POST /v1/responses`). Zhipu GLM **only supports the Chat Completions API** (`POST /v1/chat/completions`). These are completely different protocols:
 
 ```
 OpenAI Responses API:   { input, instructions, tools, ... }
 Chat Completions API:   { messages, model, temperature, ... }
 ```
 
-The project solves this with a **CCX sidecar container** — a lightweight protocol translation gateway ([CCX](https://github.com/songquanpeng/ccx)) deployed alongside Codex CLI in the same Pod:
+The project solves this with **cc-switch** — a cross-platform desktop application ([farion1231/cc-switch](https://github.com/farion1231/cc-switch)) running on the macOS host. cc-switch's built-in proxy intercepts Codex CLI's Responses API requests and translates them to Chat Completions for Zhipu GLM:
 
 ```
-┌─────────────────────────────────────────────────┐
-│                     Pod                          │
-│                                                  │
-│  ┌───────────┐         ┌──────────────────┐     │
-│  │ Codex CLI  │         │   CCX Sidecar    │     │
-│  │            │         │                  │     │
-│  │  Sends     │────────>│  Translates      │     │
-│  │  Responses │         │  Responses →     │     │
-│  │  API format│         │  Chat Completions│─────┼──> Zhipu GLM
-│  │            │<────────│                  │     │
-│  │  Receives  │         │  Reverse-converts│     │
-│  │  response  │         │  response body   │     │
-│  └───────────┘         └──────────────────┘     │
-│                                                  │
-│    localhost:3000        PROXY_ACCESS_KEY        │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  macOS Host (OrbStack / Docker Desktop)                   │
+│                                                           │
+│  ┌───────────────┐     ┌──────────────────────┐          │
+│  │   cc-switch   │     │  K8s Pod              │          │
+│  │   (desktop)   │     │  ┌──────────────┐    │          │
+│  │   proxy:15721 │◄────┼──│  Codex CLI   │    │          │
+│  │      │        │     │  │              │    │          │
+│  │      ▼        │     │  │  config.toml │    │          │
+│  │   GLM API     │     │  │  base_url=   │    │          │
+│  │               │     │  │  host.docker.│    │          │
+│  │               │     │  │  internal    │    │          │
+│  └───────────────┘     │  └──────────────┘    │          │
+│                        └──────────────────────┘          │
+└──────────────────────────────────────────────────────────┘
 ```
 
 **How it works step by step:**
 
-1. The deploy script generates `~/.codex/config.toml` that points Codex CLI to `http://localhost:3000/v1` as its model provider
-2. Codex CLI sends a Responses API request to `localhost:3000`
-3. CCX receives the request and translates it from Responses format to Chat Completions format
-4. CCX forwards the translated request to Zhipu GLM's API
+1. The deploy script generates `~/.codex/config.toml` that points Codex CLI to `http://host.docker.internal:15721/v1` (cc-switch proxy on the host)
+2. Codex CLI sends a Responses API request to the cc-switch proxy
+3. cc-switch translates the request from Responses format to Chat Completions format
+4. cc-switch forwards the translated request to Zhipu GLM's API
 5. Zhipu GLM returns a Chat Completions response
-6. CCX reverse-translates the response back to Responses format and returns it to Codex CLI
+6. cc-switch reverse-translates the response back to Responses format and returns it to Codex CLI
 
-The sidecar pattern is essential here — both containers share the same network namespace, so Codex CLI can reach CCX via `localhost`. The same API key (`CODEX_API_KEY`) serves dual purpose: authenticating Codex CLI to CCX (`PROXY_ACCESS_KEY`) and authenticating CCX to Zhipu GLM upstream.
+**Key advantage over sidecar approach:** No extra container in the Pod — cc-switch runs on the host and handles all protocol translation. The Pod contains only the Codex CLI container. Additionally, cc-switch manages the GLM API key, so no API key needs to be passed to the deploy script.
 
 **Auto-generated configuration.** The deploy script creates `config.toml` on every `apply` with three model profiles:
 
 ```toml
 model = "GLM-5.1"
-model_provider = "ccx"
+model_provider = "cc-switch"
 
-[model_providers.ccx]
-name = "CCX Proxy"
-base_url = "http://localhost:3000/v1"
+[model_providers.cc-switch]
+name = "CC Switch Proxy"
+base_url = "http://host.docker.internal:15721/v1"
 env_key = "CODEX_API_KEY"
-
-[profiles.glm-5-turbo]
-model = "GLM-5-Turbo"
-
-[profiles.glm-4-7-flashx]
-model = "GLM-4.7-FlashX"
 
 [profiles.glm-5-1]
 model = "GLM-5.1"
+model_provider = "cc-switch"
+
+[profiles.glm-4-6]
+model = "glm-4.6"
+model_provider = "cc-switch"
+
+[profiles.glm-4-5]
+model = "glm-4.5"
+model_provider = "cc-switch"
 ```
 
 Inside the container, switching models at runtime requires no redeployment:
 
 ```bash
-codex --config profile=glm-5-turbo     # Use GLM-5-Turbo
-codex --config profile=glm-4-7-flashx  # Use GLM-4.7-FlashX
-codex --config profile=glm-5-1         # Back to default GLM-5.1
+codex --config profile=glm-4-6   # Use glm-4.6
+codex --config profile=glm-4-5   # Use glm-4.5
+codex --config profile=glm-5-1   # Back to default GLM-5.1
 ```
 
-**One-time CCX channel setup.** After the first deployment, CCX needs to be configured with a Responses channel pointing to Zhipu GLM's endpoint (`https://open.bigmodel.cn/api/paas/v4/`). This is done by:
-
-1. Set `ENABLE_WEB_UI=true` in `codex-pod.yaml` or `codex-deployment.yaml`
-2. Re-apply: `./codex-deploy.sh apply`
-3. Port-forward: `kubectl port-forward codex-dev 3000:3000 -n ai`
-4. Open `http://localhost:3000` in a browser and add a **Responses** channel with the Zhipu GLM endpoint URL and your API key
-5. Set `ENABLE_WEB_UI=false` and re-apply to close the web UI
-
-The channel configuration persists in `codex-cache/ccx/` across Pod restarts. This step only needs to be done once per host.
+**Prerequisite:** cc-switch must be running on the host with proxy mode enabled (port 15721) and GLM provider configured. See the [cc-switch documentation](https://github.com/farion1231/cc-switch) for setup instructions.
 
 ## Getting Started
 
@@ -223,11 +217,11 @@ cd docker/oc
 
 # Claude Code — direct build (npm install in Dockerfile)
 cd docker/cc
-./build.sh          # Builds cc-dev:1.0.1
+./build.sh          # Builds cc-dev:2.0.1
 
 # Codex CLI — direct build (npm install in Dockerfile)
-cd docker/codex
-./build.sh          # Builds codex-dev:1.0.1
+cd docker/codex_cc
+./build.sh          # Builds codex_cc-dev:1.0.1
 ```
 
 Append `clean` to any `build.sh` for a no-cache rebuild. The build scripts auto-detect your host UID/GID — no manual configuration needed.
@@ -240,8 +234,9 @@ Append `clean` to any `build.sh` for a no-cache rebuild. The build scripts auto-
 # For Claude Code
 export ANTHROPIC_AUTH_TOKEN=your-zhipu-api-key
 
-# For Codex CLI
-export CODEX_API_KEY=your-zhipu-api-key
+# For Codex CLI — no API key needed!
+# cc-switch on the host manages GLM authentication.
+# Just make sure cc-switch is running with proxy enabled and GLM configured.
 
 # OpenCode requires no API key at deploy time
 ```
@@ -262,6 +257,9 @@ CC_REPLICAS=5 ./cc-deploy-deployment.sh apply
 
 # Scale an existing deployment at runtime
 ./cc-deploy-deployment.sh scale 2
+
+# Codex CLI — no API key needed (cc-switch handles auth)
+./codex_cc-deploy.sh apply
 ```
 
 > **Important:** Never run `kubectl apply -f cc-pod.yaml` directly. The YAML files contain `${VAR}` placeholders that are resolved by the deploy scripts via `envsubst`.
@@ -320,7 +318,7 @@ aicoding-k8s solves the practical infrastructure challenges that emerge when AI 
 
 1. **Security isolation** through Kubernetes Pod boundaries — each agent runs in its own container with its own filesystem, protecting the host machine and enabling multi-agent concurrency.
 
-2. **Seamless model adaptation** through protocol compatibility — Claude Code uses Zhipu's Anthropic-compatible endpoint with zero code changes, while Codex CLI leverages a CCX sidecar for real-time Responses-to-Chat Completions translation.
+2. **Seamless model adaptation** through protocol compatibility — Claude Code uses Zhipu's Anthropic-compatible endpoint with zero code changes, while Codex CLI connects through a cc-switch proxy on the host for real-time Responses-to-Chat Completions translation.
 
 3. **Operational simplicity** through shell-script-driven deployment — build, configure, deploy, and scale with familiar commands. No complex abstractions, no additional controllers.
 

@@ -26,7 +26,7 @@ aicoding-k8s 是一个 Kubernetes 基础设施项目，将 OpenCode、Claude Cod
 
 1. **默认隔离。** 每个助手运行在独立的 Pod 中，拥有独立的文件系统、用户命名空间和资源限制。主机受到保护——助手只能看到挂载到容器中的内容。多个助手可以并行运行，互不干扰。
 
-2. **透明的模型适配。** Claude Code 通过 Anthropic 兼容的 API 端点连接智谱 GLM，零代码修改。Codex CLI 使用 CCX Sidecar 代理实时将 OpenAI Responses API 转换为 Chat Completions。OpenCode 直接在容器内配置。从助手的角度来看，一切如常——它只是正常工作。
+2. **透明的模型适配。** Claude Code 通过 Anthropic 兼容的 API 端点连接智谱 GLM，零代码修改。Codex CLI 通过运行在宿主机上的 cc-switch 代理连接，实时将 OpenAI Responses API 转换为 Chat Completions。OpenCode 直接在容器内配置。从助手的角度来看，一切如常——它只是正常工作。
 
 3. **运维简便。** 构建镜像、设置 API Key、运行部署脚本——这就是全部工作流。从一个副本扩展到五个只需要一条命令。销毁同样简单。没有 Helm Chart、没有 CRD、没有 Operator——只有 Shell 脚本、YAML 模板和 `envsubst`。
 
@@ -39,14 +39,14 @@ aicoding-k8s/
 ├── docker/
 │   ├── oc/          # OpenCode 镜像（预下载二进制）
 │   ├── cc/          # Claude Code 镜像（npm 安装）
-│   └── codex/       # Codex CLI 镜像（npm 安装）
-├── oc-*.sh / oc-*.yaml        # OpenCode 部署脚本和模板
-├── cc-*.sh / cc-*.yaml        # Claude Code 部署脚本和模板
-├── codex-*.sh / codex-*.yaml  # Codex CLI 部署脚本和模板
-├── k8s-work/                   # 共享工作目录（hostPath 挂载）
-├── {oc,cc,codex}-cache/        # 各工具的持久化数据
-├── AGENTS.md                   # AI 代理操作指南
-└── README.md                   # 使用文档
+│   └── codex_cc/    # Codex CLI 镜像（npm 安装）
+├── oc-*.sh / oc-*.yaml              # OpenCode 部署脚本和模板
+├── cc-*.sh / cc-*.yaml              # Claude Code 部署脚本和模板
+├── codex_cc-*.sh / codex_cc-*.yaml  # Codex CLI 部署脚本和模板
+├── k8s-work/                         # 共享工作目录（hostPath 挂载）
+├── {oc,cc,codex_cc}-cache/          # 各工具的持久化数据
+├── AGENTS.md                         # AI 代理操作指南
+└── README.md                         # 使用文档
 ```
 
 ### 两种部署模式
@@ -89,12 +89,12 @@ https://open.bigmodel.cn/api/anthropic
 ENV ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic
 ```
 
-Claude Code 支持三个模型槽位——Sonnet、Opus 和 Haiku——每个通常映射到不同的 Anthropic 模型。在 aicoding-k8s 中，三个槽位默认都指向 `glm-5.1`，但可以独立覆盖：
+Claude Code 支持三个模型槽位——Sonnet、Opus 和 Haiku——每个通常映射到不同的 Anthropic 模型。在 aicoding-k8s 中，三个槽位默认都指向 `glm-5.2`，但可以独立覆盖：
 
 ```bash
-CC_SONNET_MODEL=glm-5.1
-CC_OPUS_MODEL=glm-5.1
-CC_HAIKU_MODEL=glm-5.1
+CC_SONNET_MODEL=glm-5.2
+CC_OPUS_MODEL=glm-5.2
+CC_HAIKU_MODEL=glm-5.2
 ```
 
 这之所以能工作，是因为智谱的 Anthropic 兼容层忠实地实现了完整的 Anthropic API 接口——流式响应、工具调用、多轮对话。Claude Code 完全感知不到自己在使用非 Anthropic 模型。
@@ -116,85 +116,79 @@ OpenCode 采用了不同的方式。它不需要在部署时传入 API Key，配
 
 这些通过 OpenCode 的环境变量（`OC_CONFIG_HOME`、`OC_STATE_HOME` 等）设置，每个映射到宿主机 `oc-cache/` 目录的 `subPath` 挂载。一旦配置完成，设置在 Pod 删除和重建后依然保留。
 
-### Codex CLI：CCX Sidecar 协议转换
+### Codex CLI：cc-switch 代理协议转换
 
-这是最复杂的适配场景。Codex CLI 使用 Rust 编写，**仅支持 OpenAI Responses API**（`POST /v1/responses`）。而智谱 GLM **仅支持 Chat Completions API**（`POST /v1/chat/completions`）。这是两个完全不同的协议：
+这是最复杂的适配场景。Codex CLI **仅支持 OpenAI Responses API**（`POST /v1/responses`）。而智谱 GLM **仅支持 Chat Completions API**（`POST /v1/chat/completions`）。这是两个完全不同的协议：
 
 ```
 OpenAI Responses API:   { input, instructions, tools, ... }
 Chat Completions API:   { messages, model, temperature, ... }
 ```
 
-项目通过 **CCX Sidecar 容器**解决这个问题——一个轻量级协议转换网关（[CCX](https://github.com/songquanpeng/ccx)），与 Codex CLI 部署在同一个 Pod 中：
+项目通过 **cc-switch** 解决这个问题——一个跨平台桌面应用（[farion1231/cc-switch](https://github.com/farion1231/cc-switch)），运行在 macOS 宿主机上。cc-switch 内置的代理拦截 Codex CLI 的 Responses API 请求，将其转换为 Chat Completions 格式转发给智谱 GLM：
 
 ```
-┌─────────────────────────────────────────────────┐
-│                     Pod                          │
-│                                                  │
-│  ┌───────────┐         ┌──────────────────┐     │
-│  │ Codex CLI  │         │   CCX Sidecar    │     │
-│  │            │         │                  │     │
-│  │  发送      │────────>│  协议转换         │     │
-│  │  Responses │         │  Responses →     │     │
-│  │  API 格式   │         │  Chat Completions│─────┼──> 智谱 GLM
-│  │            │<────────│                  │     │
-│  │  接收      │         │  响应反向转换      │     │
-│  │  响应      │         │  响应体           │     │
-│  └───────────┘         └──────────────────┘     │
-│                                                  │
-│    localhost:3000        PROXY_ACCESS_KEY        │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  macOS 宿主机 (OrbStack / Docker Desktop)                  │
+│                                                           │
+│  ┌───────────────┐     ┌──────────────────────┐          │
+│  │   cc-switch   │     │  K8s Pod              │          │
+│  │   (桌面应用)   │     │  ┌──────────────┐    │          │
+│  │   proxy:15721 │◄────┼──│  Codex CLI   │    │          │
+│  │      │        │     │  │              │    │          │
+│  │      ▼        │     │  │  config.toml │    │          │
+│  │   GLM API     │     │  │  base_url=   │    │          │
+│  │               │     │  │  host.docker.│    │          │
+│  │               │     │  │  internal    │    │          │
+│  └───────────────┘     │  └──────────────┘    │          │
+│                        └──────────────────────┘          │
+└──────────────────────────────────────────────────────────┘
 ```
 
 **工作流程（逐步）：**
 
-1. 部署脚本生成 `~/.codex/config.toml`，将 Codex CLI 的模型提供商指向 `http://localhost:3000/v1`
-2. Codex CLI 向 `localhost:3000` 发送 Responses API 请求
-3. CCX 接收请求，将 Responses 格式转换为 Chat Completions 格式
-4. CCX 将转换后的请求转发到智谱 GLM 的 API
+1. 部署脚本生成 `~/.codex/config.toml`，将 Codex CLI 指向 `http://host.docker.internal:15721/v1`（宿主机上的 cc-switch 代理）
+2. Codex CLI 向 cc-switch 代理发送 Responses API 请求
+3. cc-switch 将请求从 Responses 格式转换为 Chat Completions 格式
+4. cc-switch 将转换后的请求转发到智谱 GLM 的 API
 5. 智谱 GLM 返回 Chat Completions 格式的响应
-6. CCX 将响应反向转换为 Responses 格式，返回给 Codex CLI
+6. cc-switch 将响应反向转换为 Responses 格式，返回给 Codex CLI
 
-Sidecar 模式在这里至关重要——两个容器共享相同的网络命名空间，因此 Codex CLI 可以通过 `localhost` 访问 CCX。同一个 API Key（`CODEX_API_KEY`）发挥双重作用：认证 Codex CLI 到 CCX（`PROXY_ACCESS_KEY`），以及认证 CCX 到智谱 GLM 上游。
+**相比 Sidecar 方案的关键优势：** Pod 中没有额外容器——cc-switch 运行在宿主机上，处理所有协议转换。Pod 仅包含 Codex CLI 容器。此外，cc-switch 管理 GLM API Key，因此部署脚本无需传入 API Key。
 
 **自动生成的配置。** 部署脚本在每次 `apply` 时创建 `config.toml`，预配置了三个模型 Profile：
 
 ```toml
 model = "GLM-5.1"
-model_provider = "ccx"
+model_provider = "cc-switch"
 
-[model_providers.ccx]
-name = "CCX Proxy"
-base_url = "http://localhost:3000/v1"
+[model_providers.cc-switch]
+name = "CC Switch Proxy"
+base_url = "http://host.docker.internal:15721/v1"
 env_key = "CODEX_API_KEY"
-
-[profiles.glm-5-turbo]
-model = "GLM-5-Turbo"
-
-[profiles.glm-4-7-flashx]
-model = "GLM-4.7-FlashX"
 
 [profiles.glm-5-1]
 model = "GLM-5.1"
+model_provider = "cc-switch"
+
+[profiles.glm-4-6]
+model = "glm-4.6"
+model_provider = "cc-switch"
+
+[profiles.glm-4-5]
+model = "glm-4.5"
+model_provider = "cc-switch"
 ```
 
 在容器内，切换模型无需重新部署：
 
 ```bash
-codex --config profile=glm-5-turbo     # 使用 GLM-5-Turbo
-codex --config profile=glm-4-7-flashx  # 使用 GLM-4.7-FlashX
-codex --config profile=glm-5-1         # 回到默认 GLM-5.1
+codex --config profile=glm-4-6   # 使用 glm-4.6
+codex --config profile=glm-4-5   # 使用 glm-4.5
+codex --config profile=glm-5-1   # 回到默认 GLM-5.1
 ```
 
-**CCX 首次通道配置。** 首次部署后，需要为 CCX 配置一个指向智谱 GLM 端点（`https://open.bigmodel.cn/api/paas/v4/`）的 Responses 通道。步骤如下：
-
-1. 在 `codex-pod.yaml` 或 `codex-deployment.yaml` 中设置 `ENABLE_WEB_UI=true`
-2. 重新应用：`./codex-deploy.sh apply`
-3. 端口转发：`kubectl port-forward codex-dev 3000:3000 -n ai`
-4. 在浏览器中打开 `http://localhost:3000`，添加一个 **Responses** 通道，填入智谱 GLM 端点 URL 和你的 API Key
-5. 设置 `ENABLE_WEB_UI=false` 并重新应用以关闭 Web UI
-
-通道配置持久化在 `codex-cache/ccx/` 中，Pod 重启后不丢失。此步骤每台主机只需执行一次。
+**前置条件：** cc-switch 必须在宿主机上运行，代理模式已开启（端口 15721），GLM 提供商已配置。参见 [cc-switch 文档](https://github.com/farion1231/cc-switch) 了解设置方法。
 
 ## 快速开始
 
@@ -223,11 +217,11 @@ cd docker/oc
 
 # Claude Code — 直接构建（Dockerfile 中 npm install）
 cd docker/cc
-./build.sh          # 构建镜像 cc-dev:1.0.1
+./build.sh          # 构建镜像 cc-dev:2.0.1
 
 # Codex CLI — 直接构建（Dockerfile 中 npm install）
-cd docker/codex
-./build.sh          # 构建镜像 codex-dev:1.0.1
+cd docker/codex_cc
+./build.sh          # 构建镜像 codex_cc-dev:1.0.1
 ```
 
 在任何 `build.sh` 后追加 `clean` 可进行无缓存重建。构建脚本自动检测宿主机 UID/GID——无需手动配置。
@@ -240,8 +234,9 @@ cd docker/codex
 # Claude Code
 export ANTHROPIC_AUTH_TOKEN=your-zhipu-api-key
 
-# Codex CLI
-export CODEX_API_KEY=your-zhipu-api-key
+# Codex CLI — 无需 API Key！
+# 宿主机上的 cc-switch 管理 GLM 认证。
+# 只需确保 cc-switch 已运行，代理模式已开启，GLM 已配置。
 
 # OpenCode 部署时无需 API Key
 ```
@@ -262,6 +257,9 @@ CC_REPLICAS=5 ./cc-deploy-deployment.sh apply
 
 # 运行时扩缩容
 ./cc-deploy-deployment.sh scale 2
+
+# Codex CLI — 无需 API Key（cc-switch 处理认证）
+./codex_cc-deploy.sh apply
 ```
 
 > **重要：** 不要直接运行 `kubectl apply -f cc-pod.yaml`。YAML 文件中包含 `${VAR}` 占位符，需要通过部署脚本的 `envsubst` 解析。
@@ -320,7 +318,7 @@ aicoding-k8s 解决了 AI 编码助手从个人实验走向团队级部署时所
 
 1. **安全隔离**通过 Kubernetes Pod 边界实现——每个助手运行在独立的容器中，拥有独立的文件系统，保护主机并支持多助手并发。
 
-2. **无缝模型适配**通过协议兼容实现——Claude Code 使用智谱的 Anthropic 兼容端点，零代码修改；Codex CLI 利用 CCX Sidecar 实时转换 Responses 到 Chat Completions。
+2. **无缝模型适配**通过协议兼容实现——Claude Code 使用智谱的 Anthropic 兼容端点，零代码修改；Codex CLI 通过宿主机上的 cc-switch 代理实时转换 Responses 到 Chat Completions。
 
 3. **运维简便**通过 Shell 脚本驱动的部署实现——构建、配置、部署和扩缩容，全部使用熟悉的命令。没有复杂的抽象，没有额外的控制器。
 
