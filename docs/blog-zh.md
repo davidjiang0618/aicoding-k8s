@@ -226,7 +226,7 @@ cd docker/codex_cc
 
 在任何 `build.sh` 后追加 `clean` 可进行无缓存重建。构建脚本自动检测宿主机 UID/GID——无需手动配置。
 
-> **国内用户提示：** `download.sh` 从 GitHub Releases 下载 OpenCode 二进制文件，可能较慢。建议使用代理：`https_proxy=http://127.0.0.1:7890 ./download.sh`
+> **国内用户提示：** `download.sh` 从 GitHub Releases 下载 OpenCode 二进制文件，可能较慢。请先启动本地代理软件（如 Clash/V2Ray，默认端口 `7890`），再执行：`https_proxy=http://127.0.0.1:7890 ./download.sh`
 
 ### 第三步：设置 API Key
 

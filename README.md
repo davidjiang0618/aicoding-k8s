@@ -26,7 +26,7 @@ cd aicoding-k8s
 | Claude Code | `cc-dev:2.0.1` | `cd docker/cc && ./build.sh` |
 | Codex CLI | `codex_cc-dev:1.0.1` | `cd docker/codex_cc && ./build.sh` |
 
-> **OpenCode requires `download.sh` before `build.sh`** — it downloads the binary from GitHub Releases to `docker/oc/bin/` (gitignored). If the download is slow, set a proxy: `https_proxy=http://127.0.0.1:7890 ./download.sh`
+> **OpenCode requires `download.sh` before `build.sh`** — it downloads the binary from GitHub Releases to `docker/oc/bin/` (gitignored). If the download is slow (e.g., in China), start a local proxy client (Clash/V2Ray, default port `7890`) first, then run: `https_proxy=http://127.0.0.1:7890 ./download.sh`
 
 Append `clean` to any `build.sh` for a no-cache rebuild.
 

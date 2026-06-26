@@ -65,7 +65,7 @@ Codex CLI (container) → host.docker.internal:15721 (cc-switch proxy) → Zhipu
 
 ## Gotchas
 
-- **`download.sh` is slow in China**: use `https_proxy=http://127.0.0.1:7890 ./download.sh`
+- **`download.sh` is slow in China**: start a local proxy client (Clash/V2Ray, default port `7890`) first, then run `https_proxy=http://127.0.0.1:7890 ./download.sh`
 - **macOS users need `envsubst`**: `brew install gettext` (pre-installed on most Linux distros)
 - **TLS verification disabled**: `NODE_TLS_REJECT_UNAUTHORIZED=0` in all Dockerfiles — intentional
 - **`POSTGRES_PASSWORD=secret` in OC manifests**: boilerplate, not used by OpenCode itself

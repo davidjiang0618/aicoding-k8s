@@ -226,7 +226,7 @@ cd docker/codex_cc
 
 Append `clean` to any `build.sh` for a no-cache rebuild. The build scripts auto-detect your host UID/GID — no manual configuration needed.
 
-> **Note for users in China:** `download.sh` fetches the OpenCode binary from GitHub Releases, which may be slow. Use a proxy: `https_proxy=http://127.0.0.1:7890 ./download.sh`
+> **Note for users in China:** `download.sh` fetches the OpenCode binary from GitHub Releases, which may be slow. Start a local proxy client (Clash/V2Ray, default port `7890`) first, then run: `https_proxy=http://127.0.0.1:7890 ./download.sh`
 
 ### Step 3: Set Your API Key
 
